@@ -1,77 +1,63 @@
+import os
 import joblib
+import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 import streamlit as st
 
-# Load trained pipeline
-model = joblib.load("models/house_price_model.pkl")
 
-st.set_page_config(page_title="House Price Predictor", layout="wide")
-st.title("🏠 House Price Prediction Dashboard")
+@st.cache_resource
+def load_or_train_model():
+  model_path = "models/house_price_model.pkl"
+  data_path = "houses_improved_data.csv"
 
-col1, col2, col3 = st.columns(3)
+  # Fallback to check root directory if data folder isn't used
+  if not os.path.exists(data_path) and os.path.exists(
+      "data/houses_improved_data.csv"
+  ):
+    data_path = "data/houses_improved_data.csv"
 
-with col1:
-  st.subheader("Property Dimensions")
-  num_rooms = st.number_input(
-      "Number of Rooms", min_value=1, max_value=20, value=3
-  )
-  site_area = st.number_input(
-      "Site Area (sqm)", min_value=10, max_value=2000, value=300
-  )
-  built_area = st.number_input(
-      "Built Area (sqm)", min_value=10, max_value=1500, value=150
-  )
-  property_years = st.number_input(
-      "Property Age (Years)", min_value=0, max_value=100, value=5
-  )
+  if os.path.exists(model_path):
+    try:
+      return joblib.load(model_path)
+    except Exception:
+      pass  # If pickling fails due to version mismatch, retrain below
 
-with col2:
-  st.subheader("Property Categorization")
-  materials = st.selectbox(
-      "Construction Materials", ["Mud&Wood", "Concrete"]
-  )
-  typology = st.selectbox(
-      "Housing Typology", ["Detached", "Condominium", "Semi-detached"]
-  )
-  land_grading = st.selectbox(
-      "Land Value Grading", ["Low", "Medium", "High"]
-  )
+  # Train model dynamically if model file is missing or corrupted
+  df = pd.read_csv(data_path)
+  X = df.drop("Price_ETB", axis=1)
+  y = df["Price_ETB"]
 
-with col3:
-  st.subheader("Location & Access")
-  cbd_km = st.number_input(
-      "Proximity to CBD (km)", min_value=0.0, max_value=100.0, value=2.5
-  )
-  bus_km = st.number_input(
-      "Proximity to Bus Station (km)",
-      min_value=0.0,
-      max_value=50.0,
-      value=1.0,
-  )
-  schools_km = st.number_input(
-      "Proximity to Schools (km)",
-      min_value=0.0,
-      max_value=50.0,
-      value=1.5,
-  )
-  nearest_road = st.selectbox(
-      "Type of Nearest Road", ["Asphalt", "Gravel"]
+  num_features = X.select_dtypes(include=["int64", "float64"]).columns.tolist()
+  cat_features = X.select_dtypes(include=["object"]).columns.tolist()
+
+  preprocessor = ColumnTransformer(
+      transformers=[
+          ("num", "passthrough", num_features),
+          (
+              "cat",
+              OneHotEncoder(drop="first", handle_unknown="ignore"),
+              cat_features,
+          ),
+      ]
   )
 
-if st.button("Predict Price", type="primary"):
-  input_data = pd.DataFrame([{
-      "Number_of_Rooms": num_rooms,
-      "Site_Area_sqm": site_area,
-      "Built_Area_sqm": built_area,
-      "Property_Years": property_years,
-      "Construction_Materials": materials,
-      "Housing_Typology": typology,
-      "Land_Value_Grading": land_grading,
-      "Proximity_to_CBD_km": cbd_km,
-      "Proximity_to_Bus_Station_km": bus_km,
-      "Type_of_Nearest_Road": nearest_road,
-      "Proximity_to_Schools_km": schools_km,
-  }])
+  pipeline = Pipeline(
+      steps=[
+          ("preprocessor", preprocessor),
+          ("regressor", LinearRegression()),
+      ]
+  )
 
-  prediction = model.predict(input_data)[0]
-  st.success(f"### Estimated Price: {prediction:,.2f} ETB")
+  pipeline.fit(X, y)
+  os.makedirs("models", exist_ok=True)
+  joblib.dump(pipeline, model_path)
+  return pipeline
+
+
+# Load model
+model = load_or_train_model()
